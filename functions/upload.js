@@ -1,34 +1,11 @@
 // functions/upload.js
-
-// 假设您的工具函数文件路径正确
 import { errorHandling, telemetryData } from './utils/middleware';
 
 /**
  * 主请求处理器 (POST)
- * 该函数现在作为一个路由器，根据请求类型分发到不同的处理器。
- * - 'multipart/form-data': 处理文件上传。
- * - 'application/json': 处理 Telegram Webhook 回调。
+ * 仅处理文件上传 ('multipart/form-data')
  */
 export async function onRequestPost(context) {
-    const { request } = context;
-    const contentType = request.headers.get('content-type') || '';
-
-    if (contentType.includes('multipart/form-data')) {
-        return handleFileUpload(context);
-    } else if (contentType.includes('application/json')) {
-        return handleTelegramWebhook(context);
-    }
-
-    return new Response('Unsupported request type. Please send either multipart/form-data for uploads or application/json for webhooks.', {
-        status: 400,
-        headers: { 'Content-Type': 'text/plain' }
-    });
-}
-
-/**
- * 处理文件上传
- */
-async function handleFileUpload(context) {
     const { request, env } = context;
 
     try {
@@ -107,6 +84,7 @@ async function handleFileUpload(context) {
             fileId: fileId
         });
 
+        // 返回成功响应给上传客户端
         return new Response(
             JSON.stringify([{ 'src': fileUrl }]),
             { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -121,53 +99,6 @@ async function handleFileUpload(context) {
     }
 }
 
-/**
- * 处理 Telegram Webhook 回调
- */
-async function handleTelegramWebhook(context) {
-    const { request, env } = context;
-    try {
-        const update = await request.json();
-        
-        if (update.callback_query) {
-            const callbackQuery = update.callback_query;
-            const callbackData = callbackQuery.data;
-            
-            // ✅ 核心修复：检查固定的、简短的回调数据
-            if (callbackData === 'copy_link') {
-                const messageText = callbackQuery.message.text;
-                let alertText = '无法找到链接。';
-
-                // ✅ 从消息文本中用正则表达式提取链接
-                // 这个表达式匹配被 ``` 包围的 URL
-                const urlRegex = /```\n(https?:\/\/[^\s]+)\n```/;
-                const match = messageText.match(urlRegex);
-
-                if (match && match[1]) {
-                    const urlToCopy = match[1];
-                    alertText = `链接已准备好，请粘贴！\n\n${urlToCopy}`;
-                }
-                
-                // 回应回调查询，弹窗提示用户
-                await fetch(`https://api.telegram.org/bot${env.TG_Bot_Token}/answerCallbackQuery`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        callback_query_id: callbackQuery.id,
-                        text: alertText,
-                        show_alert: true // 使用弹窗提示，效果更好
-                    })
-                });
-            }
-        }
-        
-        return new Response('OK', { status: 200 });
-    } catch (error) {
-        console.error('Webhook error:', error);
-        return new Response('Error handling webhook', { status: 500 });
-    }
-}
-
 
 /**
  * 发送文件访问链接通知到 Telegram
@@ -175,7 +106,9 @@ async function handleTelegramWebhook(context) {
 async function sendFileNotification(env, fileInfo) {
     const { fileName, fileSize, fileUrl, fileType, fileId } = fileInfo;
     
-    if (env.DISABLE_NOTIFICATION === 'true') return;
+    if (env.DISABLE_NOTIFICATION === 'true') {
+        return;
+    }
 
     const formatFileSize = (bytes) => {
         if (bytes < 1024) return `${bytes} B`;
@@ -193,7 +126,6 @@ async function sendFileNotification(env, fileInfo) {
         return '📎';
     };
 
-    // 构建通知消息，注意 URL 被包裹在 ``` 中，便于提取
     const message = `
 🎉 **文件上传成功！**
 
@@ -224,13 +156,7 @@ _通过 Telegraph-Image 上传_
                 reply_markup: {
                     inline_keyboard: [
                         [
-                            { text: '🔗 直接访问', url: fileUrl },
-                            {
-                                text: '📋 复制链接',
-                                // ✅ 核心修复：使用一个简短、固定的字符串，而不是长 file_id
-                                // 这个值不能超过 64 字节
-                                callback_data: `copy_link`
-                            }
+                            { text: '🔗 直接访问', url: fileUrl }
                         ]
                     ]
                 }
